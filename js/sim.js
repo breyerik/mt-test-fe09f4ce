@@ -32,16 +32,21 @@ const SIM = (() => {
     S = { v: 1, week: 0, nextId: 0, boss: opts.boss || 'Max Mustermann', firma: opts.firma || 'Rohbau Mustermann',
       cash: BAL.start.cash, ruf: BAL.start.ruf, stage: 1, pack: false, flag: null, filter: null,
       workers: [], office: [], kolonnen: [], vehicles: [], geraete: {}, deko: {}, kredit: 0, overdraftWeeks: 0,
+      rivals: BAL.rivals.map(r => ({ n: r.n, prof: r.prof, off: rr(-BAL.rivalLoad.off, BAL.rivalLoad.off), load: rr(.2, .8) })), ramp: null,
       tenders: [], lohnOffers: [], bids: [], jobs: [], recv: [], inbox: [], log: [], done: [], pending: [],
       revHist: [], earnedTotal: 0, stats: { bids: 0, wins: 0, jobs: 0, lohnWeeks: 0, hires: 0, profit: 0, rerolls: 0 },
-      calcXp: 0, hiresFree: BAL.start.weeklyFreeHires, cand: null, matIdx: 1, matIdxUntil: 0, weather: { kind: 'ok', m: 1 },
+      calcXp: 0, hiresFree: BAL.start.weeklyFreeHires, cand: null, candBy: {}, matIdx: 1, matIdxUntil: 0, weather: { kind: 'ok', m: 1 },
       sound: true, goal: 'hire', flags: { stageNotified: 1, firstTender: false, firstJob: false, yearEnd: 0 }, visits: [], ev: {}, speed: 1, gameOver: false };
     const v = { id: uid(), type: 'transporter' }; S.vehicles.push(v);
     S.kolonnen.push({ id: uid(), name: 'Kolonne A', slots: [null, null, null], polier: null, vehicle: v.id, work: null });
     for (let i = 0; i < 3; i++) genLohnOffer();
     return S;
   }
-  function load(obj) { S = obj; return S; }
+  function load(obj) {
+    S = obj; S.candBy = S.candBy || {};
+    if (!S.rivals) S.rivals = BAL.rivals.map(r => ({ n: r.n, prof: r.prof, off: rr(-BAL.rivalLoad.off, BAL.rivalLoad.off), load: rr(.2, .8) }));
+    return S;
+  }
 
   // ---------- Mitarbeiter ----------
   const skillsOf = w => BAL.roles[w.role].skills;
@@ -73,11 +78,22 @@ const SIM = (() => {
     c.monthly = Math.round(m / 100) * 100;
     return c;
   }
+  // Bewerber bleiben pro Art (baustelle/office/polier) bestehen, bis sie eingestellt werden oder du bezahlt neu würfelst (kein Gratis-Reroll durch Abbrechen).
   function newCandidate(kind, free) {
+    S.candBy = S.candBy || {};
+    if (free && S.candBy[kind]) { S.cand = S.candBy[kind]; return { ok: true, cand: S.cand, kept: true }; }
     if (!free && S.cash < BAL.hireAdCost) return { ok: false, msg: 'Zu wenig Geld für eine neue Stellenanzeige.' };
     if (!free) { money(-BAL.hireAdCost, 'Stellenanzeige'); S.stats.rerolls++; }
-    S.cand = { kind, c: rollCandidate(kind) };
+    S.cand = S.candBy[kind] = { kind, c: rollCandidate(kind) };
     return { ok: true, cand: S.cand };
+  }
+  // Filterwechsel: passt der aktuelle Bewerber nicht, gibt es genau EINE Gratis-Neuziehung pro Bewerber; danach nur noch bezahlt.
+  function applyFilter(kind) {
+    const cd = S.candBy && S.candBy[kind]; if (!cd) return newCandidate(kind, true);
+    const pool = natPool(); if (pool.includes(cd.c.nat)) return { ok: true, kept: true };
+    if (cd.filterUsed) return { ok: true, kept: true, msg: 'Der Filter gilt ab dem nächsten Neu-Würfeln.' };
+    S.cand = S.candBy[kind] = { kind, c: rollCandidate(kind), filterUsed: true };
+    return { ok: true };
   }
   function freeSlots() { const out = []; S.kolonnen.forEach(k => k.slots.forEach((s, i) => { if (!s) out.push([k.id, i]); })); return out; }
   function hire(kolId, slot) {
@@ -86,7 +102,7 @@ const SIM = (() => {
     if (cd.kind === 'office') {
       if (S.office.length >= stageDef().desks) return { ok: false, msg: 'Kein freier Schreibtisch.' };
       if (S.cash < BAL.hireFeeOffice) return { ok: false, msg: 'Zu wenig Geld.' };
-      money(-BAL.hireFeeOffice, 'Einstellung'); S.office.push(c); S.workers.push(c);
+      money(-BAL.hireFeeOffice, 'Einstellung'); c.hiredWeek = S.week; S.office.push(c); S.workers.push(c);
     } else if (cd.kind === 'polier') {
       const k = S.kolonnen.find(x => x.id === kolId); if (!k) return { ok: false, msg: 'Keine Kolonne gewählt.' };
       S.workers.push(c); k.polier = c.id; c.kolonne = k.id;
@@ -95,7 +111,7 @@ const SIM = (() => {
       if (S.hiresFree > 0) S.hiresFree--; else { if (S.cash < BAL.hireFeeOffice / 2) return { ok: false, msg: 'Zu wenig Geld.' }; money(-BAL.hireFeeOffice / 2, 'Einstellung'); }
       S.workers.push(c); k.slots[slot] = c.id; c.kolonne = k.id;
     }
-    S.stats.hires++; S.cand = null; S.visits.push({ who: 'neu', txt: c.name + ' fängt an!' });
+    S.stats.hires++; S.cand = null; if (S.candBy) delete S.candBy[cd.kind]; S.visits.push({ who: 'neu', txt: c.name + ' fängt an!' });
     toast(`${c.name} (${BAL.roles[c.role].n}) eingestellt.`, 'good'); emit('sfx', { s: 'hire' });
     return { ok: true, worker: c };
   }
@@ -127,6 +143,7 @@ const SIM = (() => {
     ms.forEach(w => { const lau = .9 + .2 * (w.laune || 70) / 100; h += BAL.hoursPerWeek * roleProd(w) * effOf(w) * lau; });
     const p = polierOf(k); let mult = 1; if (p && !isSick(p)) mult += BAL.polierBonus;
     if (S.deko.kaffee) mult += .02;
+    if (hasRole('bauleiter')) mult += BAL.bauleiterProd;
     return { hours: h * mult, n: ms.length };
   }
   const kolonneFree = k => !k.work && !!k.vehicle;
@@ -192,7 +209,11 @@ const SIM = (() => {
     if (S.week < BAL.tendersUnlockWeek) return;
     const open = S.tenders.filter(t => t.state === 'offen').length;
     const p = (.75 + (hasRole("akquise") ? .25 : 0) + S.stage * .05) * (open >= 5 ? 0 : 1);
-    if (!S.flags.firstTender || chance(p)) {
+    if (S.stage >= 3 && S.flags.firstTender && open < 6 && chance(BAL.tenderStage3)) addTender();
+    if (!S.flags.firstTender || chance(p)) addTender();
+  }
+  function addTender() {
+    {
       const tt = tenderTypes(); if (!tt.length) return;
       const first = !S.flags.firstTender; const t = genTender(first ? 'garten' : wpick(tt)); S.tenders.push(t);
       if (first) { S.flags.firstTender = true; if (S.goal !== 'hire') S.goal = 'bid'; S.inbox.push({ id: uid(), kind: 'info', icon: 'clip', title: 'Erste Ausschreibung!', text: 'Ein Bauherr sucht jemanden für eine ' + t.title + '. Du kannst ein eigenes <b>Angebot</b> abgeben: Menü → Ausschreibungen.<br><br>Je genauer du rechnest, desto besser. Lohn ist nicht nur der Stundenlohn, und im Leistungsverzeichnis steht nicht alles.' }); }
@@ -235,17 +256,70 @@ const SIM = (() => {
     toast('Angebot abgegeben. Submission in ' + BAL.calc.submissionWeeks + ' Wochen.', 'info'); if (S.goal === 'bid') S.goal = 'play2';
     return { ok: true, quote: q };
   }
+  // ---------- Konkurrenz ----------
+  const rivalPrice = (r, g) => { const P = BAL.rivalProfiles[r.prof], B = BAL.rivalLoad; return clamp((P.mean + r.off + (r.load - .5) * B.effect + g * P.sd), .70, 1.30); };
+  function rivalsWeekly() { S.rivals.forEach(r => { r.load = clamp(r.load + rr(-BAL.rivalLoad.step, BAL.rivalLoad.step) + (.5 - r.load) * .1, 0, 1); }); }
+  // Verteilung des besten Rivalen für den Schätz-Wert (Ampel): nominelle Mischung, deterministische Stichprobe, unabhängig vom echten Spielzustand
+  const _bestCache = {};
+  function bestSamples(nR) {
+    if (_bestCache[nR]) return _bestCache[nR];
+    let z = 12345; const lr = () => { z = (Math.imul(z, 1103515245) + 12345) & 0x7fffffff; return z / 0x7fffffff; };
+    const lg = () => { let u = lr() || .5, v = lr() || .5; return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+    const out = [], N = 600, B = BAL.rivalLoad;
+    for (let i = 0; i < N; i++) {
+      const pool = BAL.rivals.map(r => ({ prof: r.prof, off: (lr() * 2 - 1) * B.off, load: .2 + lr() * .6 })); let best = 9;
+      for (let k = 0; k < nR; k++) { const j = Math.floor(lr() * pool.length), r = pool.splice(j, 1)[0]; best = Math.min(best, rivalPrice(r, lg())); }
+      out.push(best);
+    }
+    return _bestCache[nR] = out.sort((a, b) => a - b);
+  }
+  const nRivals = () => S.stage >= 3 ? 4 : 3;
+  const rufEff = () => 1 - S.ruf * BAL.rufPrice - (S.deko.pokal ? .005 : 0);
+  // Wahrscheinlichkeit auszuschließen (ungewöhnlich niedriger Preis)
+  const exclProb = p => { const B = BAL.bidding; return clamp((B.excludeFrom - p) / (B.excludeFrom - B.excludeFull), 0, 1); };
+  function winProb(p) {
+    if (p > BAL.zone.tooHigh) return 0;
+    const bs = bestSamples(nRivals()), eff = p * rufEff(); let lo = 0, hi = bs.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (bs[m] > eff) hi = m; else lo = m + 1; }
+    return (bs.length - lo) / bs.length * (1 - exclProb(p));
+  }
+  // Was der Spieler sieht: Schätzbereich des Preisniveaus (verschoben um einen festen, versteckten Fehler), nie der genaue Wert
+  const hasTool = () => !!(hasRole('kalk') || S.deko.plotter);
+  function estPct(job, q) {
+    q = q || quote(job); if (job.fz === undefined) job.fz = rr(-1, 1);
+    const B = BAL.bidding, tool = hasTool(), c = q.pct + job.fz * (tool ? B.fuzzTool : B.fuzzNone), hw = tool ? B.rangeTool : B.rangeNone;
+    return { c, lo: c - hw, hi: c + hw };
+  }
+  function outlook(job) {
+    const q = quote(job), e = estPct(job, q), B = BAL.bidding, wp = winProb(e.c), covers = q.totalNet >= q.estSelf;
+    let level, text;
+    if (e.c > BAL.zone.tooHigh) { level = 'r'; text = 'Viel zu teuer: der Bauherr lehnt ab'; }
+    else if (!covers) { level = 'r'; text = 'Unter deinen Kosten: das wäre Verlust'; }
+    else if (e.c < B.excludeFrom) { level = 'y'; text = 'Verdächtig billig: Ausschluss-Gefahr'; }
+    else if (wp >= B.green) { level = 'g'; text = 'Gute Chance, Kosten gedeckt'; }
+    else if (wp >= B.yellow) { level = 'y'; text = 'Zuschlag unsicher'; }
+    else { level = 'r'; text = 'Kaum Chance auf den Zuschlag'; }
+    return { level, text, winP: wp, covers, est: e, q };
+  }
   function resolveBid(b) {
     const job = S.tenders.find(t => t.id === b.jobId); if (!job) return;
-    const q = job.quote, nR = S.stage >= 3 ? 4 : 3, rivals = BAL.rivals.slice(0, nR).map(r => ({ n: r.n, pct: R2(clamp(r.mean + gauss() * r.sd, .72, 1.25) * 100) / 100 }));
-    const eff = q.pct * (1 - S.ruf * BAL.rufPrice - (S.deko.pokal ? .005 : 0));
+    const q = job.quote, B = BAL.bidding, nR = nRivals();
+    const pool = S.rivals.slice(), rivals = [];
+    for (let k = 0; k < nR; k++) { const r = pool.splice(Math.floor(rnd() * pool.length), 1)[0]; rivals.push({ n: r.n, pct: R2(rivalPrice(r, gauss()) * 100) / 100 }); }
+    const eff = q.pct * rufEff();
     const best = Math.min(...rivals.map(r => r.pct));
-    const won = q.pct <= BAL.zone.tooHigh && eff < best;
-    const ranking = rivals.concat([{ n: S.firma, pct: R2(q.pct), you: true }]).sort((a, b) => a.pct - b.pct);
+    const excluded = q.pct < B.excludeFrom && chance(exclProb(q.pct));
+    const won = !excluded && q.pct <= BAL.zone.tooHigh && eff < best;
+    const ranking = rivals.concat([{ n: S.firma, pct: R2(q.pct), you: true, excl: excluded }]).sort((a, b) => a.pct - b.pct);
     S.calcXp++;
-    const res = { id: uid(), kind: 'submission', jobId: job.id, title: job.title, won, pct: q.pct, ranking, total: q.total, value: job.awG || R(job.auftragswert * BAL.mwst), best };
+    const res = { id: uid(), kind: 'submission', jobId: job.id, title: job.title, won, excluded, pct: q.pct, ranking, total: q.total, value: job.awG || R(job.auftragswert * BAL.mwst), best };
+    if (excluded) { S.ruf = Math.max(0, S.ruf - 1); res.rufLoss = 1; }
     if (won) {
       job.state = 'zugesagt'; job.sum = R(q.totalNet ?? q.total); job.sumG = q.total; job.startBy = S.week + BAL.calc.startWindow; S.stats.wins++; job.client = job.client;
+      if (q.pct < B.dumpPct) { // Preisdrückerei: der Bauherr schaut genau hin (Mindermengen) und der Ruf leidet
+        const m = rr(...B.mindermenge); job.mind = R2(m); job.sum = R(job.sum * (1 - m)); job.sumG = roundTo(job.sumG * (1 - m), 100);
+        S.ruf = Math.max(0, S.ruf - B.dumpRuf); res.mind = job.mind; res.rufLoss = (res.rufLoss || 0) + B.dumpRuf;
+      }
       S.visits.push({ who: 'polier', txt: 'Zuschlag! Bauherr kommt vorbei' });
       if (job.sum > 50000 && chance(.4) && !S.ev.cousin) S.pending.push({ at: S.week + 1, ev: 'cousin', jobId: job.id });
     } else { job.state = 'abgelehnt'; S.tenders = S.tenders.filter(t => t !== job); }
@@ -264,6 +338,16 @@ const SIM = (() => {
     S.tenders = S.tenders.filter(t => t !== job); S.jobs.push(job); if (!S.flags.firstJob) { S.flags.firstJob = true; if (S.goal !== 'hire') S.goal = 'stage2'; }
     S.visits.push({ who: 'handwerker', txt: 'Los geht\'s: ' + job.title }); toast('Baustart: ' + job.title, 'good'); emit('sfx', { s: 'ok' }); return { ok: true };
   }
+  // MT-007/033: Kann der Betrieb diesen Auftrag (zusätzlich zu den offenen Zuschlägen) überhaupt starten?
+  // Liefert fehlende Fähigkeiten (Kran, Eisenflechter ...), Kolonnen-Lage und die noch nicht begonnenen Zuschläge.
+  function readiness(job) {
+    const sk = new Set(); S.kolonnen.forEach(k => kolSkills(k).forEach(x => sk.add(x)));
+    const miss = (job.needSkills || []).filter(x => !sk.has(x) && !(x === 'kran' && S.geraete.turmkran)).map(skillName);
+    const open = S.tenders.filter(t => t.state === 'zugesagt' && t !== job), pend = S.tenders.filter(t => t.state === 'geboten' && t !== job);
+    const nK = S.kolonnen.length, free = S.kolonnen.filter(kolonneFree).length, usable = S.kolonnen.filter(k => membersOf(k).length >= 2).length;
+    const needOpen = open.reduce((a, t) => a + (t.needK || 1), 0) + (job.state === 'zugesagt' ? (job.needK || 1) : 0), jobK = job.needK || 1;
+    return { miss, nK, free, usable, needK: jobK, open, pend, needOpen, noKol: usable < jobK, overbooked: usable < needOpen + (job.state === 'zugesagt' ? 0 : jobK), busyNow: free < jobK };
+  }
   const skillName = s => ({ mauern: 'Maurer', beton: 'Betonbauer', bewehren: 'Eisenflechter', bagger: 'Baggerfahrer', kran: 'Kranfahrer' }[s] || s);
 
   // ---------- Wetter & Ereignisse ----------
@@ -278,11 +362,11 @@ const SIM = (() => {
     if (kind !== 'ok') log({ frost: 'Frostwoche: Mauern und Betonieren ruhen.', regen: 'Regenwoche: nur 65 % Leistung.', sturm: 'Sturm: Arbeitsstopp.', hitze: 'Hitzewelle: Leistung sinkt.' }[kind]);
   }
   const EVENTS = {
-    stahl:   { w: 6, ok: () => S.matIdxUntil < S.week, run() { S.matIdx = 1.12; S.matIdxUntil = S.week + 8; return { icon: 'warn', title: 'Stahlpreis +20 %', text: 'Der Stahlpreis ist gesprungen. Material wird für ca. 8 Wochen rund 12 % teurer. Auch deine Kalkulationen sind betroffen.' }; } },
+    stahl:   { w: 6, ok: () => S.matIdxUntil < S.week, run() { S.matIdx = 1.12; S.matIdxUntil = S.week + 8; return { icon: 'warn', title: 'Stahlpreis +12 %', text: 'Der Stahlpreis ist gesprungen. Material wird für ca. 8 Wochen um 12 % teurer. Auch deine Kalkulationen sind betroffen.' }; } },
     bg:      { w: 2.5, ok: () => S.stage >= 2 && S.week > 40 && S.week - (S.ev.bgLast || -99) > 35 && S.jobs.length + S.kolonnen.filter(k => k.work).length > 0, run() { S.ev.bgLast = S.week; if (hasRole('sifa')) { S.ruf = Math.min(100, S.ruf + 1); return { icon: 'star', title: 'BG-Kontrolle bestanden', text: 'Die Berufsgenossenschaft kontrolliert die Baustellen. Dank deiner Sicherheitsfachkraft gibt es keine Beanstandung. Ruf +1.' }; } S.ev.bgLast = S.week; const f = roundTo(ri(800, 2500), 100); money(-f, 'Bußgeld'); return { icon: 'warn', title: 'BG-Kontrolle: Bußgeld', text: `Fehlende Schutzausrüstung auf der Baustelle: <b>${f.toLocaleString('de-DE')} €</b> Bußgeld. Eine Sicherheitsfachkraft hätte das verhindert.` }; } },
-    aender:  { w: 7, ok: () => S.jobs.length > 0, run() { const j = pick(S.jobs); const val = roundTo(j.sum * rr(.03, .06), 100); if (hasRole('bauleiter')) { j.nachtrag += val; return { icon: 'clip', title: 'Bauherr ändert alles', text: `${j.client} will bei „${j.title}" Änderungen. Dein Bauleiter schreibt sofort einen <b>Nachtrag</b>: +${val.toLocaleString('de-DE')} € extra.` }; } return { icon: 'clip', title: 'Bauherr ändert alles', text: `${j.client} will bei „${j.title}" Änderungen. Was tust du? Ohne Bauleiter ist ein Nachtrag riskant.`, choices: [{ t: 'Nachtrag anmelden (50 %)', act: 'nachtrag', arg: { id: j.id, val } }, { t: 'Einfach machen', act: 'umsonst', arg: { id: j.id } }] }; } },
+    aender:  { w: 7, ok: () => S.jobs.length > 0, run() { const j = pick(S.jobs); const val = roundTo(j.sum * rr(.03, .06), 100); if (hasRole('bauleiter')) { j.nachtrag += val; return { icon: 'clip', title: 'Bauherr ändert alles', text: `${j.client} will bei „${j.title}" Änderungen. Dein Bauleiter schreibt sofort einen <b>Nachtrag</b>: +${val.toLocaleString('de-DE')} € extra.` }; } return { icon: 'clip', title: 'Bauherr ändert alles', text: `${j.client} will bei „${j.title}" Änderungen. Was tust du? Ohne Bauleiter ist ein Nachtrag riskant: Mit 50 % Chance bekommst du <b>+${val.toLocaleString('de-DE')} €</b> extra, sonst gibt es keinen Nachtrag und Ruf −1.`, choices: [{ t: `Nachtrag anmelden (50 %: +${val.toLocaleString('de-DE')} €)`, act: 'nachtrag', arg: { id: j.id, val } }, { t: 'Einfach machen', act: 'umsonst', arg: { id: j.id } }] }; } },
     poachPolier: { w: 3, ok: () => S.workers.some(w => w.role === 'polier'), run() { const p = pick(S.workers.filter(w => w.role === 'polier')); return { icon: 'warn', title: 'Rivale wirbt Polier ab', text: `Ein Konkurrent will ${p.name} abwerben. Mit +10 % Gehalt bleibt er.`, choices: [{ t: 'Gehalt +10 %', act: 'raise', arg: { id: p.id } }, { t: 'Gehen lassen', act: 'letgo', arg: { id: p.id } }] }; } },
-    sick:    { w: 8, ok: () => S.workers.length > 0, run() { const w = pick(S.workers.filter(x => !BAL.roles[x.role].office)); if (!w) return null; const wk = ri(1, 3); w.sickUntil = S.week + wk; return { icon: 'warn', title: 'Krankmeldung', text: `${w.name} ist ${wk} Woche(n) krank.` }; } },
+    sick:    { w: 8, ok: () => S.workers.length > 0, run() { const w = pick(S.workers.filter(x => !BAL.roles[x.role].office)); if (!w) return null; const wk = ri(1, 3); w.sickUntil = S.week + wk; return { icon: 'warn', title: 'Krankmeldung', text: `${w.name} ist ${wk === 1 ? 'eine Woche' : wk + ' Wochen'} krank.` }; } },
     richtfest:{ w: 0, ok: () => false, run() { return null; } },
     meister: { w: 2, ok: () => S.stage >= 2 && !S.ev.meister, run() { S.ev.meister = 1; const c = rollCandidate('baustelle'); c.role = 'maurer'; c.name = 'Alter Meister Heinz'; c.nat = 'DE'; c.tempo = 9; c.qual = 9; c.aus = 6; c.monthly = 9500; c.meister = true; c.retireAt = S.week + 40; c.trait = 'Erfahrung'; return { icon: 'star', title: 'Der alte Meister', text: 'Ein Maurermeister kurz vor der Rente (Tempo 9, Qualität 9) bietet sich an. Er bleibt nur etwa 40 Wochen, kostet <b>9.500 €</b> im Monat. Ein freier Platz in einer Kolonne wird gebraucht.', choices: [{ t: 'Einstellen', act: 'hireCand', arg: { c } }, { t: 'Nein danke', act: 'none' }] }; } },
     rufbonus:{ w: 3, ok: () => S.stats.jobs > 0, run() { S.ruf = Math.min(100, S.ruf + 1); return { icon: 'star', title: 'Weiterempfehlung', text: 'Ein zufriedener Bauherr empfiehlt dich weiter. Ruf +1.' }; } },
@@ -335,9 +419,70 @@ const SIM = (() => {
     const B = BAL.bonitaet, ek = Math.max(1000, equity());
     return clamp(Math.round(B.base + B.ekLog * Math.log10(ek / 1000) + Math.min(B.umsatzMax, umsatzMonat() / B.umsatzDiv) + S.ruf * B.rufMul - S.kredit * B.kreditMalus), 0, 100);
   }
-  const fixedMonth = () => stageDef().fixed;
-  const weeklyFixed = () => fixedMonth() / BAL.weeksPerMonth + S.vehicles.length * BAL.vehicle.transporter.weekly + Object.keys(S.geraete).length * 40;
-  const weeklyWages = () => S.workers.reduce((a, w) => a + monthlyOf(w), 0) / BAL.weeksPerMonth;
+  // Fixkosten steigen nach einem Ausbau linear auf den neuen Wert (BAL.stageRamp Wochen)
+  const fixedMonth = (off = 0) => { const r = S.ramp, to = stageDef().fixed; if (!r) return to; return r.from + (to - r.from) * clamp((S.week + off - r.start) / Math.max(1, r.weeks), 0, 1); };
+  const weeklyFixed = (off = 0) => fixedMonth(off) / BAL.weeksPerMonth + S.vehicles.length * BAL.vehicle.transporter.weekly + Object.keys(S.geraete).length * 40;
+  // Büro-Personal: in der Probezeit nur ein Teil des Gehalts
+  const probShare = (w, off = 0) => (BAL.roles[w.role].office && w.hiredWeek !== undefined && S.week + off - w.hiredWeek < BAL.probation.weeks) ? BAL.probation.share : 1;
+  const weeklyWages = (off = 0) => S.workers.reduce((a, w) => a + monthlyOf(w) * probShare(w, off), 0) / BAL.weeksPerMonth;
+  // ---------- Kassenprognose ----------
+  // Einfache Vorschau über H Wochen: offene Rechnungen mit Zahlungsziel, Material nach Baufortschritt, Abschläge, Löhne, Fixkosten, Lohnarbeit.
+  // ex: { once: Einmalkosten jetzt, wagesAt(i): Zusatz-Löhne/Woche, fixedMonthAt(i): ersetzt Fixkosten/Monat, job: Auftrag (zugesagt), kols: [Kolonnen-IDs], weeks }
+  function forecast(ex) {
+    ex = ex || {}; const H = ex.weeks || BAL.forecast.weeks, d = payDelay(), CAPF = .9, share = BAL.pay.abschlagShare;
+    let cash = S.cash - (ex.once || 0), mn = cash, mnW = 0; const path = [];
+    const recv = S.recv.map(r => ({ at: r.due - S.week, amt: r.amt }));
+    const sj = S.jobs.map(j => ({ j, done: j.done, paid: Object.assign({}, j.paid), cap: j.kol.map(id => S.kolonnen.find(k => k.id === id)).filter(Boolean).reduce((a, k) => a + kolCapacity(k).hours, 0) * CAPF, fin: false }));
+    if (ex.job) {
+      const ks = (ex.kols || []).map(id => S.kolonnen.find(k => k.id === id)).filter(Boolean);
+      sj.push({ j: ex.job, done: 0, paid: {}, cap: ks.reduce((a, k) => a + kolCapacity(k).hours, 0) * CAPF, fin: false });
+    }
+    const lohn = S.kolonnen.filter(k => k.work && k.work.type === 'lohn').map(k => ({ left: k.work.left, w: lohnWeekly(k.work.offer, k) }));
+    const lim = -(BAL.bank.overdraftBase + bonitaet() * BAL.bank.overdraftPerBon);
+    // Annahme: freie Kolonnen nehmen Lohnarbeit an (höchstens so viele, wie es Angebote gibt), ab Woche 2 und mit 85 % Auslastung
+    // Die Kolonnen des Auftrags nehmen erst NACH dem Auftrag wieder Lohnarbeit an (ab 2 Wochen nach Fertigstellung, MT-034); noIdleKols: nie (Vergleichsbasis).
+    const jobK = new Set(ex.kols || []), noK = new Set(ex.noIdleKols || []), offs = S.lohnOffers.slice().sort((x, y) => y.n - x.n);
+    const freeK = S.kolonnen.filter(k => !k.work && !noK.has(k.id) && kolonneFree(k) && (jobK.has(k.id) || !(S.jobs.some(j => j.kol.includes(k.id))))).sort((x, y) => jobK.has(x.id) - jobK.has(y.id)).slice(0, offs.length);
+    let idleInc = 0, idleJobInc = 0, jobFin = 0;
+    freeK.forEach((k, n) => { const v = (offs[n] ? lohnWeekly(offs[n], k) : 0) * .85; if (jobK.has(k.id)) idleJobInc += v; else idleInc += v; });
+    for (let i = 1; i <= H; i++) {
+      if (i >= 2) cash += idleInc;
+      if (jobFin && !ex.noPostIdle && i >= jobFin + 2) cash += idleJobInc;
+      lohn.forEach(l => { if (l.left >= i) cash += l.w; });
+      sj.forEach(o => {
+        if (o.fin || o.cap <= 0) return; const j = o.j, used = Math.min(o.cap, j.hours - o.done), prev = o.done / j.hours; o.done += used; const prog = o.done / j.hours;
+        cash -= j.matTotal * (prog - prev) * S.matIdx * (1 - matDiscount());
+        const rb = j.blocks; if (!o.paid.kran && prog >= .6) { o.paid.kran = 1; if (rb.kran.need && !S.geraete.turmkran) cash -= rb.kran.cost * (hasRole('dispo') ? .8 : 1); }
+        if (!o.paid.entsorg && prog >= .9) { o.paid.entsorg = 1; if (rb.entsorg.need) cash -= rb.entsorg.cost; }
+        cash -= BAL.rent.fuhrWeek * (j.kol.length || (ex.kols || []).length || 1) * (o.paid.fuhr ? 0 : 1);
+        BAL.pay.abschlaege.forEach((th, n) => { if (!o.paid['a' + n] && prog >= th) { o.paid['a' + n] = 1; recv.push({ at: i + d, amt: j.sum * share }); } });
+        if (o.done >= j.hours - .01) { o.fin = true; if (ex.job && j === ex.job) jobFin = i; recv.push({ at: i + d, amt: j.sum * (1 - share * BAL.pay.abschlaege.length) }); }
+      });
+      recv.forEach(r => { if (!r.done && r.at <= i) { r.done = 1; cash += r.amt; } });
+      const fm = ex.fixedMonthAt ? ex.fixedMonthAt(i) : fixedMonth(i);
+      cash -= weeklyWages(i) + (ex.wagesAt ? ex.wagesAt(i) : 0) + fm / BAL.weeksPerMonth + S.vehicles.length * BAL.vehicle.transporter.weekly + Object.keys(S.geraete).length * 40;
+      if (S.kredit > 0) cash -= S.kredit * BAL.bank.zinsWeek; if (cash < 0) cash += cash * BAL.bank.overdraftWeek;
+      path.push(R(cash)); if (cash < mn) { mn = cash; mnW = i; }
+    }
+    const level = mn < lim ? 'bad' : mn < 0 ? 'tight' : 'ok';
+    // MT-038: typische Abweichung der Prognose (aus dem Playtest R2: Ø Fehler ≈ 0,3 / 0,6 / 1,1 / 1,5 Wochenkosten nach 1 / 2 / 4 / 8 Wochen). Künftige Aufträge, Einstellungen und Ausbauten sind NICHT enthalten.
+    const wk = weeklyWages(0) + weeklyFixed(0), UNC = BAL.forecast.unc || [.3, .64, .9, 1.1, 1.25, 1.35, 1.43, 1.5];
+    const band = path.map((_, i) => R(wk * (UNC[Math.min(i, UNC.length - 1)] || 1.5))), minLo = R(Math.min(...path.map((v, i) => v - band[i])));
+    return { path, min: R(mn), minWeek: mnW, limit: R(lim), level, start: R(S.cash - (ex.once || 0)), end: path[path.length - 1], band, minLo, bandEnd: band[band.length - 1] || 0 };
+  }
+  // Kapitalbedarf eines Auftrags (MT-034/035): größter Abstand zwischen der Kassenkurve ohne und mit dem Auftrag (bis er bezahlt ist).
+  // Vergleichsbasis: die Kolonnen des Auftrags verdienen ohne ihn NICHTS (sonst zählt entgangene Lohnarbeit als Kapitalbedarf).
+  // Der Abstand der Kurven (statt Differenz der Tiefpunkte) bleibt sinnvoll, auch wenn die Basis ohnehin schon im Minus ist.
+  // short: Fehlbetrag bis ins Plus (eng) bzw. bis zur Überziehungsgrenze (Gefahr), 0 wenn die Kasse reicht.
+  function forecastJob(job, kols) {
+    kols = kols && kols.length ? kols : S.kolonnen.filter(kolonneFree).slice(0, job.needK).map(k => k.id);
+    const H = BAL.forecast.weeks, long = Math.min(40, Math.ceil(job.hours / Math.max(1, kols.reduce((a, id) => a + kolCapacity(S.kolonnen.find(k => k.id === id)).hours * .9, 0))) + payDelay() + 2);
+    const base = forecast({ weeks: H }), withJ = forecast({ weeks: H, job, kols });
+    const bl = forecast({ weeks: long, noIdleKols: kols }), wl = forecast({ weeks: long, job, kols, noPostIdle: true });
+    let need = 0; wl.path.forEach((v, i) => { need = Math.max(need, bl.path[i] - v); });
+    const short = withJ.level === 'bad' ? Math.max(0, R(withJ.limit - withJ.min)) : withJ.level === 'tight' ? Math.max(0, -withJ.min) : 0;
+    return { base, withJob: withJ, need: Math.max(0, R(need)), short, baseMin: base.min, baseNeg: base.min < 0, long, kols };
+  }
   const creditLimit = () => Math.max(0, roundTo(bonitaet() * BAL.bank.limitPerBon - S.kredit, 500));
   function takeCredit(amt) { if (amt > creditLimit()) return { ok: false, msg: 'Die Bank gibt dir höchstens ' + creditLimit().toLocaleString('de-DE') + ' € mehr.' }; S.kredit += amt; money(amt, 'Kredit'); return { ok: true }; }
   function repayCredit(amt) { amt = Math.min(amt, S.kredit, Math.max(0, S.cash)); if (amt <= 0) return { ok: false }; S.kredit -= amt; money(-amt, 'Tilgung'); return { ok: true }; }
@@ -350,8 +495,8 @@ const SIM = (() => {
     const u = upgradeInfo(); if (!u) return { ok: false, msg: 'Höchste Stufe erreicht.' }; if (!u.ok) return { ok: false, msg: 'Schwellen noch nicht erreicht.' };
     let pay = u.cost;
     if (S.cash < pay) { if (finance && u.canFinance) { const need = pay - S.cash; if (need > creditLimit() + 0) return { ok: false, msg: 'Bank gibt dafür nicht genug Kredit. Bonität steigern!' }; S.kredit += pay - Math.max(0, S.cash); S.cash += pay - Math.max(0, S.cash); } else return { ok: false, msg: 'Zu wenig Geld (' + pay.toLocaleString('de-DE') + ' € nötig).' }; }
-    S.cash -= pay; S.stage++; emit('money', { amt: -pay, label: 'Ausbau' }); S.flags.stageNotified = S.stage;
-    S.inbox.push({ id: uid(), kind: 'stage', stage: S.stage, title: 'Neue Büro-Stufe!', text: `<b>${BAL.stages[S.stage - 1].n}</b>. Fixkosten jetzt ${BAL.stages[S.stage - 1].fixed.toLocaleString('de-DE')} € im Monat. Bis zu ${BAL.stages[S.stage - 1].kol} Kolonnen und ${BAL.stages[S.stage - 1].desks} Büroplätze.` });
+    const fromFix = stageDef().fixed; S.cash -= pay; S.stage++; S.ramp = { from: fromFix, start: S.week, weeks: BAL.stageRamp[S.stage - 1] || 0 }; emit('money', { amt: -pay, label: 'Ausbau' }); S.flags.stageNotified = S.stage;
+    S.inbox.push({ id: uid(), kind: 'stage', stage: S.stage, title: 'Neue Büro-Stufe!', text: `<b>${BAL.stages[S.stage - 1].n}</b>. Fixkosten steigen in ${BAL.stageRamp[S.stage - 1] || 0} Wochen auf ${BAL.stages[S.stage - 1].fixed.toLocaleString('de-DE')} € im Monat. Bis zu ${BAL.stages[S.stage - 1].kol} Kolonnen und ${BAL.stages[S.stage - 1].desks} ${BAL.stages[S.stage - 1].desks === 1 ? 'Büroplatz' : 'Büroplätze'}.` });
     emit('sfx', { s: 'level' }); S.visits.push({ who: 'polier', txt: 'Neues Büro! Glückwunsch!' }); if (S.goal === 'stage2' && S.stage >= 2) S.goal = 'free';
     return { ok: true };
   }
@@ -371,7 +516,7 @@ const SIM = (() => {
   function step() {
     if (S.gameOver) return;
     S.week++; const d = dateOf(S.week); let earned = 0;
-    rollWeather(); const W = S.weather;
+    rollWeather(); const W = S.weather; rivalsWeekly();
     if (S.matIdxUntil && S.matIdxUntil <= S.week) { S.matIdx = 1; S.matIdxUntil = 0; log('Stahlpreis normalisiert.'); }
     // Mitarbeiter
     S.workers.slice().forEach(w => {
@@ -494,16 +639,16 @@ const SIM = (() => {
     switch (S.goal) {
       case 'hire': return `Stelle 3 Mitarbeiter ein (${n}/3)`;
       case 'lohn': return 'Nimm ein Lohnarbeit-Angebot an';
-      case 'play': return 'Lass die Wochen laufen: Deine Kolonne verdient Geld';
+      case 'play': return S.kolonnen.some(k => k.work) ? 'Lass die Wochen laufen: Deine Kolonne verdient Geld' : 'Deine Kolonne steht still: nimm das nächste Lohnarbeit-Angebot an';
       case 'bid': return 'Gib dein erstes Angebot ab (Ausschreibungen)';
-      case 'play2': return 'Warte auf die Submission (Wochen laufen lassen)';
+      case 'play2': return S.tenders.some(t => t.state === 'zugesagt') ? 'Zuschlag! Starte den Bau unter Menü → Aufträge' : S.tenders.some(t => t.state === 'geboten') ? 'Warte auf die Submission (Wochen laufen lassen)' : 'Gib das nächste Angebot ab (Ausschreibungen)';
       case 'stage2': case 'free': default:
         if (!ui) return 'Du hast die Firmenzentrale erreicht! Baue das Imperium aus.';
         return `Ziel: Stufe ${S.stage + 1} · Umsatz ${ui.umsatz[2] ? '✔' : '✖'}  EK ${ui.ek[2] ? '✔' : '✖'}  Bonität ${ui.bon[2] ? '✔' : '✖'}`;
     }
   }
   const api = { roundTo, nice, epStep, epGross, get S() { return S; }, newGame, load, step, hooks, on: fn => hooks.fn = fn, seed: n => _seed = n, rnd, rr, ri, pick, R, R2, clamp,
-    dateOf, dateStr, MONTHS, isWinter, stageDef, skillsOf, stat, teamBonus, isSick, roleProd, effOf, monthlyOf, rollCandidate, newCandidate, hire, fire, moveWorker, freeSlots, removeWorker,
+    readiness, dateOf, dateStr, MONTHS, isWinter, stageDef, skillsOf, stat, teamBonus, isSick, roleProd, effOf, monthlyOf, rollCandidate, newCandidate, applyFilter, fixedMonth, probShare, outlook, winProb, estPct, exclProb, forecast, forecastJob, hire, fire, moveWorker, freeSlots, removeWorker,
     mgmtCap, membersOf, polierOf, kolSkills, kolWeeklyCost, kolCapacity, kolonneFree, addKolonne, assignPolier, acceptLohn, lohnWeekly, lohnRate, genTender, openCalc, autoEP, quote, calcSpread, submitBid, assignJob, skillName,
     resolveInbox, equity, umsatzMonat, bonitaet, weeklyFixed, weeklyWages, creditLimit, takeCredit, repayCredit, upgradeInfo, upgrade, buyGear, buyDeko, buyPack, setFlag, setFilter, goalText, hasRole, matDiscount, payDelay, recvTotal, setGoalAuto, toast, log, natPool };
   return api;

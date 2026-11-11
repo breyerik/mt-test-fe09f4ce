@@ -54,11 +54,11 @@ const ART = (() => {
     const cx = ART.cx; cx.globalAlpha = alpha === undefined ? 1 : alpha; cx.drawImage(im, (x - w / 2) * s, (y - h) * s, w * s, h * s); cx.globalAlpha = 1;
   };
   function bubble(text, x, y) {
-    const cx = ART.cx, s = ART.sc; cx.font = `${22 * s * .5 * 1.0}px VT, monospace`; const f = 22 * s * .5; cx.font = `${f * 1.35}px VT, monospace`;
-    const tw = cx.measureText(text).width + 14 * s * .5, th = f * 1.6, bx = Math.max(4, Math.min(ART.cv.width - tw - 4, x * s - tw / 2)), by = y * s - th;
+    const cx = ART.cx, s = ART.sc; const f = 22 * s * .5; cx.font = `${24 * s}px VT, monospace`;
+    const tw = cx.measureText(text).width + 14 * s, th = 34 * s, bx = Math.max(4, Math.min(ART.cv.width - tw - 4, x * s - tw / 2)), by = y * s - th;
     cx.fillStyle = '#fffdf4'; cx.strokeStyle = '#26407a'; cx.lineWidth = 2 * s * .5; cx.beginPath(); cx.roundRect(bx, by, tw, th, 6 * s * .5); cx.fill(); cx.stroke();
     cx.beginPath(); cx.moveTo(x * s - 5, by + th); cx.lineTo(x * s, by + th + 8 * s * .5); cx.lineTo(x * s + 5, by + th); cx.fillStyle = '#fffdf4'; cx.fill();
-    cx.fillStyle = '#26304a'; cx.textBaseline = 'middle'; cx.fillText(text, bx + 7 * s * .5, by + th / 2 + 1);
+    cx.fillStyle = '#26304a'; cx.textBaseline = 'middle'; cx.fillText(text, bx + 7 * s, by + th / 2 + 1);
   }
   ART.draw = () => {
     const cx = ART.cx, cv = ART.cv; if (!cx) return; cx.clearRect(0, 0, cv.width, cv.height);

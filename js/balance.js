@@ -21,13 +21,13 @@ const BAL = {
     kran:     { n:'Kranfahrer',        monthly:8300, prod:.85, skills:['kran'],      stage:3, kol:true },
     azubi:    { n:'Azubi (Maurer)',    monthly:1900, prod:.40, skills:[],            stage:2, kol:true },
     polier:   { n:'Polier',            monthly:8000, prod:1.0, skills:['mauern'],    stage:2, kol:false, polier:true },
-    buero:    { n:'Bürokraft',         monthly:4900, prod:0, skills:[], stage:2, office:true },
-    einkauf:  { n:'Einkäufer',         monthly:6800, prod:0, skills:[], stage:3, office:true },
-    kalk:     { n:'Kalkulator',        monthly:7500, prod:0, skills:[], stage:3, office:true },
-    bauleiter:{ n:'Bauleiter',         monthly:8100, prod:0, skills:[], stage:3, office:true },
-    sifa:     { n:'Sicherheitsfachkraft',monthly:5500, prod:0, skills:[], stage:3, office:true },
-    dispo:    { n:'Disponent',         monthly:6200, prod:0, skills:[], stage:4, office:true },
-    akquise:  { n:'Akquise / Vertrieb',monthly:6000, prod:0, skills:[], stage:4, office:true }
+    buero:    { n:'Bürokraft',         monthly:4000, prod:0, skills:[], stage:2, office:true, ab:2 },
+    einkauf:  { n:'Einkäufer',         monthly:5500, prod:0, skills:[], stage:3, office:true, ab:4 },
+    kalk:     { n:'Kalkulator',        monthly:6000, prod:0, skills:[], stage:3, office:true, ab:3 },
+    bauleiter:{ n:'Bauleiter',         monthly:6600, prod:0, skills:[], stage:3, office:true, ab:3 },
+    sifa:     { n:'Sicherheitsfachkraft',monthly:4500, prod:0, skills:[], stage:3, office:true, ab:4 },
+    dispo:    { n:'Disponent',         monthly:6200, prod:0, skills:[], stage:4, office:true, ab:4 },
+    akquise:  { n:'Akquise / Vertrieb',monthly:6000, prod:0, skills:[], stage:4, office:true, ab:4 }
   },
   // Gewürfelte Mitarbeiter: Verteilung der Berufe beim Anwerben (Baustelle)
   hirePool: [['maurer',40],['helfer',32],['betonbauer',9],['eisen',6],['azubi',7]],
@@ -43,11 +43,19 @@ const BAL = {
   stages: [
     { id:1, n:'Baucontainer',               fixed:350,   cost:0,      kol:1, desks:0,  need:null },
     { id:2, n:'Doppelcontainer + Lager',    fixed:1100,  cost:15000,  kol:2, desks:1,  need:{ umsatz:25000,  ek:20000,  bon:25 } },
-    { id:3, n:'Gemietetes Büro mit Bauhof', fixed:3200,  cost:45000,  kol:4, desks:4,  need:{ umsatz:70000,  ek:60000,  bon:45 } },
+    { id:3, n:'Gemietetes Büro mit Bauhof', fixed:2600,  cost:45000,  kol:4, desks:4,  need:{ umsatz:70000,  ek:60000,  bon:45 } },
     { id:4, n:'Halle mit Büro + Fuhrpark',  fixed:6500,  cost:160000, kol:6, desks:6,  need:{ umsatz:200000, ek:180000, bon:65 }, finance:true },
     { id:5, n:'Niederlassung mit Kran',     fixed:10000, cost:300000, kol:8, desks:8,  need:{ umsatz:300000, ek:300000, bon:75 }, finance:true },
     { id:6, n:'Firmenzentrale',             fixed:14500, cost:600000, kol:10,desks:10, need:{ umsatz:450000, ek:500000, bon:85 }, finance:true }
   ],
+  // Stufen-Ausbau: Fixkosten steigen nach dem Kauf linear über N Wochen auf den neuen Wert (Index = neue Stufe - 1)
+  stageRamp: [0, 4, 12, 16, 20, 24],
+  // Büro-Team: Probezeit mit reduziertem Gehalt, dazu klare Wirkung je Rolle (siehe ui.js)
+  probation: { weeks: 8, share: .6 },
+  bauleiterProd: .06,        // Bauleiter: +6 % Leistung in allen Kolonnen (Koordination)
+  tenderStage3: .5,          // ab Stufe 3: zweite Chance pro Woche auf eine weitere Ausschreibung
+  // Kassenprognose: Vorschau-Horizont in Wochen
+  forecast: { weeks: 8 },
   bonitaet: { base:10, ekLog:13, umsatzDiv:12000, umsatzMax:25, rufMul:.3, kreditMalus:.00004 },
   bank: { zinsWeek:.0015, limitPerBon:1500, overdraftWeek:.0025, overdraftBase:2000, overdraftPerBon:300, insolvencyWeeks:8, rescue:30000 },
   // Fahrzeuge & Geräte (Kaufen oder Mieten – echte Abwägung)
@@ -65,7 +73,7 @@ const BAL = {
     tafel:  { n:'Bautafel mit Fotos', price:600, txt:'Fertige Projekte hängen als Foto dran. Ruf +1 je Projekt.' },
     pokal:  { n:'Pokal-Regal',   price:1500, txt:'Kundenvertrauen: Gebote wirken 0,5 % günstiger.', stage:2 },
     hund:   { n:'Bürohund',      price:800,  txt:'Laune +, ab und zu ein Kommentar.' },
-    plotter:{ n:'Plotter / Pläne', price:2500, txt:'Kalkulations-Streuung -2 Prozentpunkte.', stage:2 }
+    plotter:{ n:'Plotter / Pläne', price:2500, txt:'Kalkulation genauer (-2 Prozentpunkte), Markt-Schätzung enger.', stage:2 }
   },
   // Kalkulation / Angebot
   calc: {
@@ -75,13 +83,19 @@ const BAL = {
     agk: [.07,.12,.09], wagnis: [.02,.05,.03], gewinn: [.03,.08,.05],   // [min,max,default]
     submissionWeeks: 1, tenderLife: [4,7], startWindow: 8, vertragsstrafe: .03
   },
-  // Konkurrenz (Preisspiegel): Mittelwert und Streuung als Anteil vom verdeckten Auftragswert
+  // Konkurrenz (Preisspiegel): jeder Rivale hat ein festes Profil + persönlichen Versatz + schwankende Auslastung (ausgelastet = teurer)
+  rivalProfiles: { aggressiv:{ mean:.95, sd:.05 }, normal:{ mean:1.00, sd:.045 }, teuer:{ mean:1.07, sd:.05 } },
   rivals: [
-    { n:'Spar-Rohbau GmbH',       mean:.96, sd:.04 },
-    { n:'Beispiel & Söhne Rohbau',mean:1.01, sd:.035 },
-    { n:'Musterbau Nord GmbH',    mean:1.04, sd:.045 },
-    { n:'Fantasie-Hochbau AG',    mean:1.07,sd:.055 }
+    { n:'Spar-Rohbau GmbH',       prof:'aggressiv' },
+    { n:'Nordlicht Bau KG',       prof:'aggressiv' },
+    { n:'Beispiel & Söhne Rohbau',prof:'normal' },
+    { n:'Musterbau Nord GmbH',    prof:'normal' },
+    { n:'Fantasie-Hochbau AG',    prof:'teuer' },
+    { n:'Hansa-Beispiel Hochbau', prof:'teuer' }
   ],
+  rivalLoad: { step:.15, effect:.10, off:.02 },   // Auslastung 0..1 wandert pro Woche um ±step; Preis x (1+(Last-.5)*effect); persönlicher Versatz ±off
+  // Bieten: Schätzbereich, Ampel (folgt der echten Zuschlagschance), Dumping-Regeln
+  bidding: { fuzzTool:.02, fuzzNone:.04, rangeTool:.03, rangeNone:.06, green:.55, yellow:.25, excludeFrom:.85, excludeFull:.70, dumpPct:.88, dumpRuf:2, mindermenge:[.03,.08] },
   zone: { best:[.92,1.03], lowRisk:.90, tooHigh:1.08 },
   rufPrice: .0008,              // je Rufpunkt: Gebot wirkt so viel günstiger
   // Lohnarbeit
@@ -89,7 +103,7 @@ const BAL = {
   // Abrechnung / Zahlung
   pay: { delay:4, delayBuero:2, abschlaege:[.25,.5,.75], abschlagShare:.25 },
   // Schwankung real vs. Kalkulation
-  real: { aufwand:[.90,1.10], material:[.96,1.07], auftragswert:[1.00,1.10] },
+  real: { aufwand:[.90,1.10], material:[.96,1.07], auftragswert:[1.08,1.18] },
   maengel: { base:.38, perQual:.03, polier:.10, bauleiter:.14, cost:[.01,.05] },
   weather: { regen:.65, sturm:0, frost:0, hitze:.92, kug:.6, winterMonths:[12,1,2,3], winterExtra:.15 },
   events: { perWeek:.38 },

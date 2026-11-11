@@ -4,10 +4,10 @@
 :root{--navy:#26407a;--navyD:#1a2c58;--blue:#4a82d4;--blueL:#9cc8f8;--blueP:#dcecff;--paper:#fbf8ec;--paper2:#efe8d0;--ink:#26304a;
  --org:#ff8a2a;--orgD:#c85a10;--grn:#46b848;--grnD:#2a8230;--red:#e24a3c;--yel:#ffcc22;--gry:#8f97aa;}
 *{box-sizing:border-box;margin:0;padding:0;}
-html,body{background:#0d1020;height:100%;}
+html,body{background:#0d1020;height:100%;overflow:hidden;}
 body{display:flex;justify-content:center;align-items:flex-start;font-family:'VT',monospace;color:var(--ink);}
 img,canvas{image-rendering:pixelated;}
-#phone{width:390px;height:844px;position:relative;overflow:hidden;background:linear-gradient(#3aa0e8 0 40%,#8cd4ff 100%);}
+#phone{width:390px;height:844px;flex:none;position:absolute;left:50%;top:0;transform-origin:50% 0;transform:translateX(-50%);overflow:hidden;background:linear-gradient(#3aa0e8 0 40%,#8cd4ff 100%);}
 #dim{position:absolute;inset:0;background:rgba(18,36,84,.42);display:none;z-index:5;}
 #dim.on{display:block;}
 /* top bar */
@@ -113,6 +113,8 @@ td.r,th.r{text-align:right;}
 @keyframes tin{from{transform:translateY(-12px);opacity:0}}
 .fx{position:absolute;z-index:21;pointer-events:none;font-family:'PX';font-weight:700;font-size:18px;text-shadow:2px 2px 0 #fff,-2px -2px 0 #fff,2px -2px 0 #fff,-2px 2px 0 #fff;animation:fxup 1.6s ease-out forwards;white-space:nowrap;}
 .fx.pos{color:#1a8a2a}.fx.neg{color:#d03828}
+@keyframes fxtop{0%{transform:translateY(10px);opacity:0}15%{opacity:1;transform:translateY(0)}80%{opacity:1}100%{transform:translateY(-4px);opacity:0}}
+.fx.top{animation:fxtop 1.6s ease-out forwards;}
 @keyframes fxup{0%{transform:translateY(0);opacity:0}10%{opacity:1}100%{transform:translateY(-70px);opacity:0}}
 #bot .info{display:flex;flex-direction:column;justify-content:center;gap:2px;font-size:19px;}
 #bot .info .goal{color:var(--navy);line-height:17px;white-space:normal;max-height:34px;overflow:hidden;}
@@ -168,3 +170,17 @@ select{font-family:'VT';font-size:20px;border:3px solid var(--blue);border-radiu
 .win .body > *{flex-shrink:0;}
 .tbl td.r{white-space:nowrap;}
 .dlgbtns .btn{font-size:12px;padding:8px 3px;}
+
+.nw{white-space:nowrap}
+.stickysum{position:sticky;top:0;z-index:3;margin:-10px -10px 0;padding:6px 10px;background:var(--paper2);border-bottom:3px solid var(--navy);display:flex;flex-direction:column;gap:3px;}
+.meter .band{position:absolute;top:0;bottom:0;background:rgba(255,255,255,.35);border-left:2px dashed var(--navy);border-right:2px dashed var(--navy);}
+.card.fc.bad{border-color:#d03828;background:#fff0ec;}.spark{width:100%;height:34px;display:block;background:#f4f8ff;border:2px solid var(--navy);border-radius:4px;}
+
+/* MT-042: kompaktes Gebots-Layout */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+.stp{display:flex;flex-direction:column;gap:1px;border:2px solid var(--blue);border-radius:6px;background:#fff;padding:2px 6px;}
+.stp .sl{font-size:16px;line-height:14px;color:#56608a;}
+.stp .step{justify-content:space-between;} .stp .step .v{min-width:40px;text-align:center;}
+.win.tight .body{gap:5px;padding:8px;}.win.tight .stickysum{margin:-8px -8px 0;}.win.tight .chk{padding:2px 6px;}.win.tight .card{padding:4px 8px;}.win.tight .btn{padding:7px 3px;}
+.win.tight .scale{margin-top:0;font-size:14px;line-height:12px;}.win.tight .meter{height:20px;}
+.win.tight .tbl.tight2 td{font-size:16px;line-height:14px;padding:0 3px;}.win.tight .stamp{font-size:22px;padding:0 10px;}
